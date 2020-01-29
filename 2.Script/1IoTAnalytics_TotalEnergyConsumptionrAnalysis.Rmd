@@ -1,0 +1,520 @@
+---
+title: "Ubiqum_1_IoTAnalytics_TotalEnergyConsumption_3Submeters"
+author: "SuninChoi"
+date: "11/15/2019"
+output: html_document
+Exploratory data analysis on total energy consumption based on 3 sub-meters
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Domain Research and Exploratory Data Analysis
+
+### 1. Obtain the data using SQL query
+#### 1.1 open libraries
+
+```{r install RMySQL}
+library(RMySQL)
+library(ggplot2)
+library(funModeling)
+library(corrplot)
+library(dplyr)
+library(readxl)
+library(readr)
+library(caret)      #R modeling workhorse & ggplot2
+library(tidyverse)  #Package for tidying data
+library(lubridate)  #For working with dates/times of a time series
+library(DEoptimR)
+library(gridExtra)
+library(car)
+library(VIM)        #Visualizing and imputing missing values
+library(Hmisc)      #for descriptive statistics
+library(forecast)   #forcasting package
+library(kableExtra) #fancy table generator
+library(broom)      #Tidy statistical summary output
+library(knitr)      #report generation
+```
+
+
+#### 1.2 Connect to the database and see what it contains
+
+
+```{r database and data, echo=FALSE}
+# Create a database connection 
+con = dbConnect(MySQL(), user='deepAnalytics', password='Sqltask1234!', dbname='dataanalytics2018', host='data-analytics-2018.cbrosir2cswx.us-east-1.rds.amazonaws.com')
+
+# List the tables contained in the database 
+dbListTables(con)
+
+# Use asterisk to specify all attributes for download
+irisALL <- dbGetQuery(con, "SELECT * FROM iris")
+
+yr_2006All <- dbGetQuery(con, "SELECT * FROM yr_2006")
+yr_2007All <- dbGetQuery(con, "SELECT * FROM yr_2007")
+yr_2008All <- dbGetQuery(con, "SELECT * FROM yr_2008")
+yr_2009All <- dbGetQuery(con, "SELECT * FROM yr_2009")
+yr_2010All <- dbGetQuery(con, "SELECT * FROM yr_2010")
+summary(yr_2010All)
+df_status(yr_2010All)
+
+
+# Combine tables into one dataframe using dplyr
+yr3 <- bind_rows(yr_2007All, yr_2008All, yr_2009All)
+summary(yr3)
+head(yr3)
+```
+
+
+### 2. Preprocessing
+#### 2.1. Create new columns for date and time attributes
+
+
+```{r}
+## Combine Date and Time attribute values in a new attribute column
+yr3 <-cbind(yr3,paste(yr3$Date,yr3$Time), stringsAsFactors=FALSE)
+
+## Give the new attribute in the 6th column a header name 
+##!!! NOTE: if you downloaded more than 5 attributes you will need to change the column number)
+colnames(yr3)[11] <-"DateTime"
+
+## Move the DateTime attribute within the dataset
+yr3 <- yr3[,c(ncol(yr3), 1:(ncol(yr3)-1))]
+head(yr3)
+```
+
+
+#### 2.2 Convert the new DateTime attribute to a DateTime data type called POSIXct
+
+
+```{r}
+# Convert DateTime from POSIXlt to POSIXct 
+yr3$DateTime <- as.POSIXct(yr3$DateTime, "%Y/%m/%d %H:%M:%S")
+
+# Add the time zone
+attr(yr3$DateTime, "tzone") <- "Europe/Paris"
+
+# Inspect the data types
+str(yr3)
+
+# Exclude 2010 year data
+yr3_1 <- filter(yr3, year(DateTime) != 2010)
+```
+
+
+#### 2.3 Rename variables and assess Values
+
+
+```{r}
+# Change feature names
+colnames(yr3_1)
+
+colnames(yr3_1)[5] <- 'Global_active_power'
+colnames(yr3_1)[6] <- 'Global_reactive_power'
+colnames(yr3_1)[9] <- 'Kitchen'
+colnames(yr3_1)[10] <- 'LaundryRoom'
+colnames(yr3_1)[11] <- 'HeaterOrAC'
+
+
+#-Visualize extent and pattern of missing data
+aggr(yr3_1, col=c('navyblue','red'),
+                  numbers=TRUE, 
+                  sortVars=TRUE, 
+                  labels=names(yr3_1),
+                  cex.axis=.7, 
+                  gap=3, 
+                  ylab=c("Histogram of missing data","Pattern"), 
+                  digits=2)
+
+#-Remove rows with NA's
+yr3_1 <- na.omit(yr3_1)
+  
+#-Check that there are no missing values remaining
+sum(is.na(yr3_1))
+
+```
+
+
+#### 2.4. Create a new column for 3 submeters
+
+
+```{r}
+# Create long form of data set
+yr3_tidy <- yr3_1 %>%
+  gather(Meter, Watt_hr, `Kitchen`, `LaundryRoom`, `HeaterOrAC`)  
+
+# Convert meter feature to categorical
+yr3_tidy$Meter <- factor(yr3_tidy$Meter)
+
+# Select features
+yr3_tidy <- yr3_tidy %>% 
+  select(DateTime, Global_active_power, Global_reactive_power, Voltage, Global_intensity, Meter, Watt_hr)
+
+# Date attributes with lubridate
+yr3_tidy$year <- year(yr3_tidy$DateTime)
+yr3_tidy$quarter <- quarter(yr3_tidy$DateTime)
+yr3_tidy$month <- month(yr3_tidy$DateTime)
+yr3_tidy$week <- week(yr3_tidy$DateTime)
+yr3_tidy$weekdays <- weekdays(yr3_tidy$DateTime)
+yr3_tidy$day <- day(yr3_tidy$DateTime)
+yr3_tidy$hour <- hour(yr3_tidy$DateTime)
+
+#-peak at data 
+glimpse(yr3_tidy)
+summary(yr3_tidy)
+```
+
+
+## 3. Explore the data
+### 3.1  Sub Meters Analysis
+#### 3.1.1 Yearly Time Period
+
+```{r}
+library(wesanderson)
+names(wes_palettes)
+
+# Yearly Time Period
+yr3_tidy %>%
+  group_by(year, Meter) %>%
+  summarise(sum=round(sum(Watt_hr/1000),3)) %>%
+  ggplot(aes(x=factor(year), y=sum)) +
+  labs(x='Year', y='kWh') +
+  ggtitle('Yearly Total Energy Consumption') +
+  geom_bar(stat='identity', aes(fill = Meter), color='black') +
+  theme(panel.border=element_rect(colour='lightgray', fill=NA)) +
+  theme(text = element_text(size = 10)) +
+  scale_fill_manual(values = wes_palette("Cavalcanti1", n = 3))
+
+
+yr3_tidy %>%
+  group_by(year(DateTime), Meter) %>%
+  summarise(sum=sum(Watt_hr)) %>%
+  ggplot(aes(x=factor(`year(DateTime)`), sum, group=Meter,fill=Meter)) +
+  labs(x='Year', y='Proportion of Energy Usage') +
+  ggtitle('Yearly Total Energy Consumption - Percentages') +
+  geom_bar(stat='identity', position='fill', color='black') +
+  theme(panel.border=element_rect(colour='lightgray', fill=NA)) +
+  theme(text = element_text(size = 10)) +
+  scale_fill_manual(values = wes_palette("Cavalcanti1", n = 3))
+
+
+
+
+```
+
+
+#### 3.1.2 Quarterly Time Period
+
+
+```{r}
+#-Quarterly bar plot
+yr3_tidy %>%
+  group_by(quarter(DateTime), Meter) %>%
+  summarise(sum=round(sum(Watt_hr/1000),3)) %>%
+  ggplot(aes(x=factor(`quarter(DateTime)`), y=sum)) +
+  labs(x='Quarter of the Year', y='kWh') +
+  ggtitle('Quarterly Total Energy Consumption') +
+  geom_bar(stat='identity', aes(fill = Meter), color='black') +
+  theme(panel.border=element_rect(colour='lightgray', fill=NA)) +
+  theme(text = element_text(size = 10)) +
+  scale_fill_manual(values = wes_palette("Moonrise1", n = 3))
+
+yr3_tidy %>%
+  group_by(quarter(DateTime), Meter) %>%
+  summarise(sum=sum(Watt_hr)) %>%
+  ggplot(aes(x=factor(`quarter(DateTime)`), sum, group=Meter,fill=Meter)) +
+  labs(x='Quarter of the year', y='Proportion of Energy Usage') +
+  ggtitle('Quarterly Total Energy Consumption - Percentages') +
+  geom_bar(stat='identity', position='fill', color='black') +
+  theme(panel.border=element_rect(colour='lightgray', fill=NA)) +
+  theme(text = element_text(size = 10)) +
+  scale_fill_manual(values = wes_palette("Moonrise1", n = 3))
+
+```
+
+
+#### 3.1.3 Monthly Time Period
+
+
+```{r}
+#-Monthly bar chart
+yr3_tidy %>%
+  group_by(month, Meter) %>%
+  summarise(sum=round(sum(Watt_hr)/1000),3) %>%
+  ggplot(aes(x=factor(month), y=sum)) +
+    labs(x='Month of the Year', y='kWh') +
+    ggtitle('Monthly Total Energy Usage') +
+    geom_bar(stat='identity', aes(fill = Meter), colour='black') +
+  theme(panel.border=element_rect(colour='lightgray', fill=NA)) +
+  theme(text = element_text(size = 10)) +
+  scale_fill_manual(values = wes_palette("GrandBudapest2", n = 3))
+
+yr3_tidy %>%
+  group_by(month(DateTime), Meter) %>%
+  summarise(sum=sum(Watt_hr)) %>%
+  ggplot(aes(x=factor(`month(DateTime)`), sum, group=Meter,fill=Meter)) +
+  labs(x='Month of the year', y='Proportion of Energy Usage') +
+  ggtitle('Monthly Total Energy Consumption - Percentages') +
+  geom_bar(stat='identity', position='fill', color='black') +
+  theme(panel.border=element_rect(colour='lightgray', fill=NA)) +
+  theme(text = element_text(size = 10)) +
+  scale_fill_manual(values = wes_palette("GrandBudapest2", n = 3))
+
+```
+
+
+#### 3.1.4 Weekly and Weekdays Time Period
+
+
+```{r}
+#-Week of the year- bar plot
+yr3_tidy %>%
+  group_by(week(DateTime), Meter) %>%
+  summarise(sum=sum(Watt_hr/1000)) %>%
+  ggplot(aes(x=factor(`week(DateTime)`), y=sum)) +
+    labs(x='Week of the Year', y='kWh') +
+    ggtitle('Weekly Total Energy Usage') +
+    theme(axis.text.x = element_text(angle=90)) +
+    geom_bar(stat='identity', aes(fill=Meter), colour='black') +
+  theme(panel.border=element_rect(colour='lightgray', fill=NA)) +
+  theme(text = element_text(size = 10)) +
+  scale_fill_manual(values = wes_palette("GrandBudapest1", n = 3))
+
+yr3_tidy %>%
+  group_by(week(DateTime), Meter) %>%
+  summarise(sum=sum(Watt_hr)) %>%
+  ggplot(aes(x=factor(`week(DateTime)`), sum, group=Meter,fill=Meter)) +
+  labs(x='Week of the year', y='Proportion of Energy Usage') +
+  ggtitle('Weekly Total Energy Consumption - Percentages') +
+  geom_bar(stat='identity', position='fill', color='black') +
+  theme(panel.border=element_rect(colour='lightgray', fill=NA)) +
+  theme(text = element_text(size = 10)) +
+  scale_fill_manual(values = wes_palette("GrandBudapest1", n = 3))
+
+
+yr3_tidy$weekdays <- ordered(yr3_tidy$weekdays, levels=c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"))
+
+
+yr3_tidy %>%
+  group_by(weekdays, Meter) %>%
+  summarise(sum=sum(Watt_hr/1000)) %>%
+  ggplot(aes(x=weekdays, y=sum)) +
+           labs(x='Weekdays', y='kWh') +
+           ggtitle('Weekdays Total Energy Usage') +
+           theme(axis.text.x = element_text(angle=90)) +
+           geom_bar(stat='identity', aes(fill=Meter), colour='black') + 
+           theme(panel.border=element_rect(colour='lightgray', fill=NA)) +
+           theme(text = element_text(size = 10)) +
+           scale_fill_manual(values = wes_palette("Rushmore1", n = 3))
+
+totaldataset %>%
+  group_by(Meter) %>%
+  summarise(sum=round(sum(Watt_hr/1000),4)) %>%
+  ggplot(aes(x=Meter, y=sum)) +
+  labs(x='Meter', y='kWh') +
+  ggtitle('Total Energy Consumption') +
+  geom_bar(stat='identity', aes(fill = Meter), color='black') +
+  theme(panel.border=element_rect(colour='lightgray', fill=NA)) +
+  theme(text = element_text(size = 10)) +
+  scale_fill_manual(values = wes_palette("Cavalcanti1", n = 4))
+
+
+
+
+```
+
+
+#### 3.1.5 Daily Time Period
+
+
+```{r}
+#-Hour of day bar chart
+yr3_tidy %>%
+  filter(month(DateTime) == c(3,5,11,26)) %>%
+  group_by(hour(DateTime), Meter) %>%
+  summarise(sum=round(sum(Watt_hr)/1000),3) %>%
+  ggplot(aes(x=factor(`hour(DateTime)`), y=sum)) +
+  labs(x='Hour of the Day', y='kWh') +
+  ggtitle('Daily Total Energy Usage') +
+  geom_bar(stat='identity', aes(fill = Meter), colour='black') +
+  theme(panel.border=element_rect(colour='lightgray', fill=NA)) +
+  theme(text = element_text(size = 10)) +
+  scale_fill_manual(values = wes_palette("Chevalier1", n = 3))
+
+yr3_tidy %>%
+  group_by(month(DateTime) == c(3, 5, 11, 26)) %>%
+  group_by(hour(DateTime), Meter) %>%
+  summarise(sum=sum(Watt_hr)) %>%
+  ggplot(aes(x=factor(`hour(DateTime)`), sum, group=Meter,fill=Meter)) +
+  labs(x='Hour of the Day', y='Proportion of Energy Usage') +
+  ggtitle('Daily Total Energy Consumption - Percentages') +
+  geom_bar(stat='identity', position='fill', color='black') +
+  theme(panel.border=element_rect(colour='lightgray', fill=NA)) +
+  theme(text = element_text(size = 10)) +
+  scale_fill_manual(values = wes_palette("Chevalier1", n = 3))
+
+```
+
+
+### 3.2  Remaining Energy Analysis
+#### 3.2.1 Processing
+
+
+```{r}
+# Select features
+yr3_tidy <- yr3_tidy %>% 
+  select(DateTime, Global_active_power, Global_reactive_power, Voltage, Global_intensity, Meter, Watt_hr)
+
+
+# Create a new column for remaing energy
+reE<- yr3_1 %>% 
+  mutate(kw_per_min =(Global_active_power*1000)/60) %>% 
+  mutate(remainingE = kw_per_min 
+         - Kitchen - LaundryRoom - HeaterOrAC)
+
+sum(reE$Kitchen, reE$LaundryRoom, reE$HeaterOrAC)
+sum(reE$remainingE) 
+
+# Create long form of data set
+totaldataset <- reE %>%
+  gather(Meter, Watt_hr, `Kitchen`, `LaundryRoom`,`HeaterOrAC`, `remainingE`)
+totaldataset <- na.omit(totaldataset)
+summary(totaldataset$Watt_hr)
+
+# Convert meter feature to categorical
+totaldataset$Meter <- factor(totaldataset$Meter)
+
+# Date attributes with lubridate
+totaldataset$year <- year(totaldataset$DateTime)
+totaldataset$quarter <- quarter(totaldataset$DateTime)
+totaldataset$month <- month(totaldataset$DateTime)
+totaldataset$week <- week(totaldataset$DateTime)
+totaldataset$weekdays <- weekdays(totaldataset$DateTime)
+totaldataset$day <- day(totaldataset$DateTime)
+totaldataset$hour <- hour(totaldataset$DateTime)
+```
+
+
+#### 3.2.2 Explore data
+* Total Energy Consumption w/remaining energy
+
+
+```{r}
+totaldataset %>%
+  group_by(Meter) %>%
+  summarise(sum=round(sum(Watt_hr/1000),4)) %>%
+  ggplot(aes(x=Meter, y=sum)) +
+  labs(x='Meter', y='kWh') +
+  ggtitle('Total Energy Consumption') +
+  geom_bar(stat='identity', aes(fill = Meter), color='black') +
+  theme(panel.border=element_rect(colour='lightgray', fill=NA)) +
+  theme(text = element_text(size = 10)) +
+  scale_fill_manual(values = wes_palette("Cavalcanti1", n = 4))
+
+totaldataset %>%
+  group_by(Meter) %>%
+  summarise(sum=sum(Watt_hr)) %>%
+  ggplot(aes(x=Meter, sum, group=Meter,fill=Meter)) +
+  labs(x='Meter', y='Proportion of Energy Usage') +
+  ggtitle('Total Energy Consumption - Percentages') +
+  geom_bar(stat='identity', position='fill', color='black') +
+  theme(panel.border=element_rect(colour='lightgray', fill=NA)) +
+  theme(text = element_text(size = 10)) +
+  scale_fill_manual(values = wes_palette("Cavalcanti1", n = 4))
+
+# Pie Chart from data frame with Appended Sample Sizes
+bp <- totaldataset %>%
+  group_by(Meter) %>%
+  summarise(sum = sum(Watt_hr)) 
+
+bpp <- ggplot(bp, aes(x="", y=sum, fill=Meter))+
+  geom_bar(width = 1, stat = "identity") + 
+  scale_fill_manual(values = wes_palette("Cavalcanti1", n = 4))
+bpp
+
+pie <- bpp + coord_polar("y", start=0)
+pie
+sum(bp$sum)
+# eachsum/totalsum
+```
+
+
+* Time based Analysis w/remaining energy
+
+
+```{r}
+totaldataset %>%
+  group_by(year(DateTime), Meter) %>%
+  summarise(sum=sum(Watt_hr)) %>%
+  ggplot(aes(x=factor(`year(DateTime)`), sum, group=Meter,fill=Meter)) +
+  labs(x='Year', y='Proportion of Energy Usage') +
+  ggtitle('Yearly Total Energy Consumption - Percentages') +
+  geom_bar(stat='identity', position='fill', color='black') +
+  theme(panel.border=element_rect(colour='lightgray', fill=NA)) +
+  theme(text = element_text(size = 10)) +
+  scale_fill_manual(values = wes_palette("Cavalcanti1", n = 4))
+
+totaldataset %>%
+  group_by(quarter(DateTime), Meter) %>%
+  summarise(sum=sum(Watt_hr)) %>%
+  ggplot(aes(x=factor(`quarter(DateTime)`), sum, group=Meter,fill=Meter)) +
+  labs(x='Quarter of the year', y='Proportion of Energy Usage') +
+  ggtitle('Quarterly Total Energy Consumption - Percentages') +
+  geom_bar(stat='identity', position='fill', color='black') +
+  theme(panel.border=element_rect(colour='lightgray', fill=NA)) +
+  theme(text = element_text(size = 10)) +
+  scale_fill_manual(values = wes_palette("Moonrise1", n = 4))
+
+totaldataset %>%
+  group_by(month(DateTime), Meter) %>%
+  summarise(sum=sum(Watt_hr)) %>%
+  ggplot(aes(x=factor(`month(DateTime)`), sum, group=Meter,fill=Meter)) +
+  labs(x='Month of the year', y='Proportion of Energy Usage') +
+  ggtitle('Monthly Total Energy Consumption - Percentages') +
+  geom_bar(stat='identity', position='fill', color='black') +
+  theme(panel.border=element_rect(colour='lightgray', fill=NA)) +
+  theme(text = element_text(size = 10)) +
+  scale_fill_manual(values = wes_palette("GrandBudapest2", n = 4))
+
+totaldataset %>%
+  group_by(week(DateTime), Meter) %>%
+  summarise(sum=sum(Watt_hr)) %>%
+  ggplot(aes(x=factor(`week(DateTime)`), sum, group=Meter,fill=Meter)) +
+  labs(x='Week of the year', y='Proportion of Energy Usage') +
+  ggtitle('Weekly Total Energy Consumption - Percentages') +
+  geom_bar(stat='identity', position='fill', color='black') +
+  theme(panel.border=element_rect(colour='lightgray', fill=NA)) +
+  theme(text = element_text(size = 10)) +
+  scale_fill_manual(values = wes_palette("GrandBudapest1", n = 4))
+
+
+totaldataset$weekdays <- ordered(totaldataset$weekdays, levels=c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"))
+
+totaldataset %>%
+  group_by(weekdays, Meter) %>%
+  summarise(sum=sum(Watt_hr)) %>%
+  ggplot(aes(x=factor(`weekdays`), sum, group=Meter,fill=Meter)) +
+  labs(x='Week of the year', y='Proportion of Energy Usage') +
+  ggtitle('Weekly Total Energy Consumption - Percentages') +
+  geom_bar(stat='identity', position='fill', color='black') +
+  theme(panel.border=element_rect(colour='lightgray', fill=NA)) +
+  theme(text = element_text(size = 10)) +
+  scale_fill_manual(values = wes_palette("Rushmore1", n = 4))
+
+totaldataset %>%
+  group_by(month(DateTime) == c(3, 5, 11, 26)) %>%
+  group_by(hour(DateTime), Meter) %>%
+  summarise(sum=sum(Watt_hr)) %>%
+  ggplot(aes(x=factor(`hour(DateTime)`), sum, group=Meter,fill=Meter)) +
+  labs(x='Hour of the Day', y='Proportion of Energy Usage') +
+  ggtitle('Daily Total Energy Consumption - Percentages') +
+  geom_bar(stat='identity', position='fill', color='black') +
+  theme(panel.border=element_rect(colour='lightgray', fill=NA)) +
+  theme(text = element_text(size = 10)) +
+  scale_fill_manual(values = wes_palette("Chevalier1", n = 4))
+```
+
+
+
+

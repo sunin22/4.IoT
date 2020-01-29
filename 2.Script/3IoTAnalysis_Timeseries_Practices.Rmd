@@ -1,0 +1,155 @@
+---
+title: "2IoTTimeSeriesPractices"
+author: "SuninChoi"
+date: "12/3/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r pressure, echo=FALSE}
+EC_time<- reE %>% 
+  group_by(Date) %>% 
+  summarise(ts=sum(Kitchen, LaundryRoom, HeaterOrAC, restE))
+
+EC_time <-as.data.frame(EC_time)
+class(EC_time)
+class(EC_time$ts)
+class(EC_time$Date)
+dim(EC_time)
+str(EC_time)
+```
+
+```{R}
+#prophet
+colnames(EC_time) <- c("ds", "y")
+head(EC_time)
+EC_time$y <- log10(EC_time$y)
+View(summary(EC_time))
+plot(y ~ ds, EC_time, type = "l")
+
+library(prophet)
+m <- prophet(EC_time)
+future <- make_future_dataframe(m, periods = 365)
+forecast <- predict(m, future)
+plot(m, forecast)
+tail(forecast[c('ds', 'yhat', 'yhat_lower', 'yhat_upper')])
+tail(forecast)
+prophet_plot_components(m, forecast)
+```
+
+```{r}
+reE$year <- year(reE$DateTime)
+reE$month <- month(reE$DateTime)
+
+EC_total <- reE %>% 
+  group_by(year, month) %>% 
+  summarise(ts=sum(Kitchen, LaundryRoom, HeaterOrAC, restE))
+
+library(zoo)
+EC_total$year <- as.Date(EC_total$year)
+EC_total$month <- as.Date(EC_total$month)
+str(EC_total)
+
+pass.ts <- ts(EC_total, start = c(2007, 1), frequency = 12)
+str(pass.ts)
+pass.ts
+
+autoplot(pass.ts)
+
+
+
+
+ECY.ts <- ts(EC_total, start = 2007, end=2011, frequency = 1)
+ECQ.ts <- ts(EC_total, start = 2007, end=2011, frequency = 4)
+ECM.ts <- ts(EC_total, start = 2007, end=2011, frequency = 12)
+ECW.ts <- ts(EC_total, start = 2007, end=2011, frequency = 52)
+
+autoplot(ECY.ts)
+autoplot(ECQ.ts)
+autoplot(ECM.ts)
+autoplot(ECM.ts, facets = TRUE) +
+  geom_smooth() +
+  labs("International arrivals to Australia",
+       y = "Arrivals (in thousands)",
+       x = NULL)
+
+ggAcf(ECM.ts)
+
+ggseasonplot(ECQ.ts, year.labels=FALSE, continuous=TRUE)
+
+```
+
+```{r}
+EC_time$Date <- as.POSIXct(EC_time$Date, format = "%Y-%m-%d %H:%M:%S")
+
+EC_time$year <- year(EC_time$DateTime)
+EC_time$quarter <- quarter(EC_time$DateTime)
+EC_time$month <- month(EC_time$DateTime)
+EC_time$week <- week(EC_time$DateTime)
+EC_time$weekdays <- weekdays(EC_time$DateTime)
+EC_time$day <- day(EC_time$DateTime)
+EC_time$hour <- hour(EC_time$DateTime)
+EC_time$minute <- minute(EC_time$DateTime)
+
+#Quaterly
+EC_quarter <- ts(EC_time, frequency = 4, start = 2007, end = 2011)
+print(EC_quarter)
+
+#Monthly
+EC_monthly <- ts (EC_time, frequency = 12, start = 2007, end = 2011)
+print(EC_monthly)                
+
+#Yearly
+EC_yearly <- ts (EC_time, frequency=1, start=2007, end=2012)
+autoplot(EC_yearly)                                
+
+
+
+
+
+
+# double check structure
+str(EC_time$Date)
+
+# use dplyr and mutate to add a day column to your data
+EC_time <- EC_time %>%
+  mutate(day = as.Date(Date, format = "%Y-%m-%d"))
+
+
+EC_time$day <- log10(EC_time$day)
+# let's look at the new column
+head(EC_time$day)
+
+# how large is the resulting data frame?
+nrow(EC_time)
+## [1] 4700
+
+# plot the data using ggplot2
+ggplot(EC_time, aes(x = day, y = ts)) +
+      geom_point() +
+      labs(title = "Total Daily Energy Consumption")
+
+#month
+EC_time_month <- EC_time %>%
+  mutate(month = as.Date(Date, format = "%Y-%m-%d"))
+
+EC_time_month$month <- log10(EC_time_month$month)
+
+
+# Transform to `ts` class
+monthly_ts <- ts(EC_time_month$month, start = 2007, freq = 12)  # Specify start and end year, measurement frequency (monthly = 12)
+
+# Decompose using `stl()`
+monthly_stl <- stl(monthly_ts, s.window = "period")
+
+# Generate plots
+plot(monthly_stl)  # top=original data, second=estimated seasonal, third=estimated smooth trend, bottom=estimated irregular element i.e. unaccounted for variation
+monthplot(monthly_milk_ts, choice = "seasonal")  # variation in milk production for each month
+seasonplot(monthly_milk_ts)
+```
+
+

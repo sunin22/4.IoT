@@ -1,0 +1,143 @@
+---
+title: "2IoTAnalysis_Tableau"
+author: "SuninChoi"
+date: "11/27/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r install RMySQL}
+library(RMySQL)
+library(ggplot2)
+library(funModeling)
+library(corrplot)
+library(dplyr)
+library(readxl)
+library(readr)
+library(caret)      #R modeling workhorse & ggplot2
+library(tidyverse)  #Package for tidying data
+library(lubridate)  #For working with dates/times of a time series
+library(DEoptimR)
+library(gridExtra)
+library(car)
+library(VIM)        #Visualizing and imputing missing values
+library(Hmisc)      #for descriptive statistics
+library(forecast)   #forcasting package
+library(kableExtra) #fancy table generator
+library(broom)      #Tidy statistical summary output
+library(knitr)      #report generation
+```
+
+
+#### 1.2 Connect to the database and see what it contains
+
+
+```{r database and data, echo=FALSE}
+# Create a database connection 
+con = dbConnect(MySQL(), user='deepAnalytics', password='Sqltask1234!', dbname='dataanalytics2018', host='data-analytics-2018.cbrosir2cswx.us-east-1.rds.amazonaws.com')
+
+# List the tables contained in the database 
+dbListTables(con)
+
+# Use asterisk to specify all attributes for download
+irisALL <- dbGetQuery(con, "SELECT * FROM iris")
+
+yr_2006All <- dbGetQuery(con, "SELECT * FROM yr_2006")
+yr_2007All <- dbGetQuery(con, "SELECT * FROM yr_2007")
+yr_2008All <- dbGetQuery(con, "SELECT * FROM yr_2008")
+yr_2009All <- dbGetQuery(con, "SELECT * FROM yr_2009")
+yr_2010All <- dbGetQuery(con, "SELECT * FROM yr_2010")
+summary(yr_2010All)
+df_status(yr_2010All)
+
+
+# Combine tables into one dataframe using dplyr
+YearConsumption <- bind_rows(yr_2007All, yr_2008All, yr_2009All, yr_2010All)
+
+```
+
+
+### 2. Preprocessing
+#### 2.1. Create new columns for date and time attributes
+
+
+```{r}
+## Combine Date and Time attribute values in a new attribute column
+YearConsumption <-cbind(YearConsumption,paste(YearConsumption$Date,YearConsumption$Time), stringsAsFactors=FALSE)
+
+## Give the new attribute in the 6th column a header name 
+##!!! NOTE: if you downloaded more than 5 attributes you will need to change the column number)
+colnames(YearConsumption)[11] <-"DateTime"
+
+## Move the DateTime attribute within the dataset
+YearConsumption <- YearConsumption[,c(ncol(YearConsumption), 1:(ncol(YearConsumption)-1))]
+head(yr3)
+```
+
+
+#### 2.2 Convert the new DateTime attribute to a DateTime data type called POSIXct
+
+
+```{r}
+# Convert DateTime from POSIXlt to POSIXct 
+YearConsumption$DateTime <- as.POSIXct(YearConsumption$DateTime, "%Y/%m/%d %H:%M:%S")
+
+# Add the time zone
+attr(YearConsumption$DateTime, "tzone") <- "Europe/Paris"
+
+
+```
+
+
+#### 2.3 Rename variables and assess Values
+
+
+```{r}
+
+# Change feature names
+colnames(YearConsumption)[9] <- 'Kitchen'
+colnames(YearConsumption)[10] <- 'LaundryRoom'
+colnames(YearConsumption)[11] <- 'HeaterOrAC'
+
+#-Remove rows with NA's
+YearConsumption<- na.omit(YearConsumption)
+  
+
+# Create a new column for remaing energy
+inrestE<- YearConsumption %>% 
+  mutate(kw_per_min =(Global_active_power*1000)/60) %>% 
+  mutate(restE = kw_per_min 
+         - Kitchen - LaundryRoom - HeaterOrAC)
+
+sum(reE$Kitchen, reE$LaundryRoom, reE$HeaterOrAC)
+sum(reE$remainingE) 
+
+inrestE <- inrestE %>% 
+  select(DateTime, Kitchen, LaundryRoom, HeaterOrAC, restE)
+
+inrestE$year <- year(inrestE$DateTime)
+inrestE$quarter <- quarter(inrestE$DateTime)
+inrestE$month <- month(inrestE$DateTime)
+inrestE$week <- week(inrestE$DateTime)
+inrestE$weekdays <- weekdays(inrestE$DateTime)
+inrestE$day <- day(inrestE$DateTime)
+inrestE$hour <- hour(inrestE$DateTime)
+inrestE$minute <- minute(inrestE$DateTime)
+inrestE$seconds <- second(inrestE$DateTime)
+
+
+EC2007 <- filter(inrestE, year(DateTime) == 2007)
+EC2008 <- filter(inrestE, year(DateTime) == 2008)
+EC2009 <- filter(inrestE, year(DateTime) == 2009)
+EC2010 <- filter(inrestE, year(DateTime) == 2010)
+
+library('data.table')
+fwrite(EC2007, "C:/Users/sunny/Desktop/4.Tableau/1.File/EC2007.csv", col.names = T)
+fwrite(EC2008, "C:/Users/sunny/Desktop/4.Tableau/1.File/EC2008.csv", col.names = T)
+fwrite(EC2009, "C:/Users/sunny/Desktop/4.Tableau/1.File/EC2009.csv", col.names = T)
+fwrite(EC2010, "C:/Users/sunny/Desktop/4.Tableau/1.File/EC2010.csv", col.names = T)
+
+```
